@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CYBER-PONG // OVERDRIVE</title>
+
+  <!-- MediaPipe Hands & Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      --bg: #030712;
+      --cyan: #00f0ff;
+      --pink: #ff0055;
+      --amber: #f59e0b;
+      --green: #10b981;
+      --violet: #a855f7;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    body {
+      background: radial-gradient(circle at center, #0d1527 0%, var(--bg) 100%);
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 12px;
+      overflow-x: hidden;
+      user-select: none;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .title {
+      font-size: 2.2rem;
+      font-weight: 900;
+      letter-spacing: 4px;
+      color: var(--cyan);
+      text-shadow: 0 0 15px rgba(0, 240, 255, 0.4);
+    }
+    .controls-hud {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 10px;
+      background: rgba(15, 23, 42, 0.85);
+      padding: 8px 20px;
+      border-radius: 6px;
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      font-size: 0.9rem;
+    }
+    .btn-toggle {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-toggle.active {
+      background: var(--cyan);
+      color: #000;
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+    }
+    .game-arena-wrapper {
+      position: relative;
+      width: 860px;
+      height: 520px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+      border: 2px solid var(--cyan);
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.25);
+      transition: transform 0.05s ease-out;
+    }
+    video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      opacity: 0.2;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .overlay-hud {
+      position: absolute;
+      top: 12px;
+      width: 100%;
+      display: flex;
+      justify-content: space-around;
+      font-size: 2.6rem;
+      font-weight: 900;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .p1-score { color: var(--cyan); text-shadow: 0 0 15px rgba(0, 240, 255, 0.6); }
+    .p2-score { color: var(--pink); text-shadow: 0 0 15px rgba(255, 0, 85, 0.6); }
+    
+    .status-banner {
+      position: absolute;
+      bottom: 12px;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      padding: 0 20px;
+      font-size: 0.85rem;
+      font-weight: bold;
+      z-index: 10;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="title">CYBER-PONG // OVERDRIVE</div>
+  </header>
+
+  <div class="controls-hud">
+    <div>MODE:</div>
+    <button class="btn-toggle active" id="btn-1p" onclick="setMode('1P')">1P vs SYNAPSE AI</button>
+    <button class="btn-toggle" id="btn-2p" onclick="setMode('2P')">2P LOCAL (2 HANDS)</button>
+    <div style="margin-left: 12px; color: #64748b;">
+      FPS: <span id="fps-counter" style="color: var(--green);">60</span>
+    </div>
+  </div>
+
+  <div class="game-arena-wrapper" id="arena-wrapper">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="game-canvas" width="860" height="520"></canvas>
+    
+    <div class="overlay-hud">
+      <div class="p1-score" id="p1-score">0</div>
+      <div class="p2-score" id="p2-score">0</div>
+    </div>
+
+    <div class="status-banner">
+      <div id="p1-status" style="color: var(--cyan);">P1: PALM [NORMAL]</div>
+      <div id="center-msg" style="color: var(--amber);">HIT POWER ORBS // MAKE A FIST TO SMASH</div>
+      <div id="p2-status" style="color: var(--pink);">P2: AI AUTO</div>
+    </div>
+  </div>
+
+  <script>
+    // Audio Synthesizer
+    const Sound = {
+      ctx: null,
+      init() {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      },
+      tone(f, type = 'square', d = 0.08, vol = 0.15) {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(f, this.ctx.currentTime);
+        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + d);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + d);
+      },
+      hit() { this.tone(480, 'square', 0.05, 0.2); },
+      smash() { 
+        this.tone(120, 'sawtooth', 0.35, 0.4); 
+        setTimeout(() => this.tone(900, 'square', 0.15, 0.25), 40);
+      },
+      powerup() {
+        [600, 800, 1100].forEach((f, i) => setTimeout(() => this.tone(f, 'sine', 0.1, 0.2), i * 50));
+      },
+      wall() { this.tone(260, 'triangle', 0.04, 0.15); },
+      score() {
+        [440, 554, 659, 880].forEach((f, i) => setTimeout(() => this.tone(f, 'sine', 0.15, 0.2), i * 60));
+      }
+    };
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('webcam');
+    const arenaWrapper = document.getElementById('arena-wrapper');
+    const p1ScoreEl = document.getElementById('p1-score');
+    const p2ScoreEl = document.getElementById('p2-score');
+    const p1StatusEl = document.getElementById('p1-status');
+    const p2StatusEl = document.getElementById('p2-status');
+    const fpsCounter = document.getElementById('fps-counter');
+
+    let gameMode = "1P";
+    let p1Score = 0;
+    let p2Score = 0;
+    let screenShake = 0;
+
+    // Paddle Configs
+    const DEFAULT_PADDLE_H = 88;
+    const PADDLE_W = 14;
+
+    const p1 = { 
+      x: 20, y: 216, targetY: 216, vy: 0, h: DEFAULT_PADDLE_H, 
+      isFist: false, isFrozen: false, freezeTimer: 0 
+    };
+    const p2 = { 
+      x: canvas.width - 20 - PADDLE_W, y: 216, targetY: 216, vy: 0, h: DEFAULT_PADDLE_H, 
+      isFist: false, isFrozen: false, freezeTimer: 0 
+    };
+
+    // Balls list for Multiball support
+    let balls = [];
+    function createBall(x, y, vx, vy, isSuper = false) {
+      return {
+        x: x || canvas.width / 2,
+        y: y || canvas.height / 2,
+        vx: vx || (Math.random() > 0.5 ? 6.5 : -6.5),
+        vy: vy || (Math.random() * 4 - 2),
+        size: isSuper ? 15 : 12,
+        speed: Math.hypot(vx || 6.5, vy || 2),
+        isSuper: isSuper,
+        trail: []
+      };
+    }
+    balls.push(createBall());
+
+    // Power-Up System
+    let powerUps = [];
+    const POWER_TYPES = [
+      { type: 'MULTIBALL', icon: '⚡', color: '#f59e0b' },
+      { type: 'SHIELD', icon: '🛡️', color: '#10b981' },
+      { type: 'FREEZE', icon: '❄️', color: '#00f0ff' }
+    ];
+
+    function spawnPowerUp() {
+      if (powerUps.length >= 2) return;
+      const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)];
+      powerUps.push({
+        x: canvas.width / 2 + (Math.random() * 260 - 130),
+        y: 80 + Math.random() * (canvas.height - 160),
+        r: 18,
+        ...type
+      });
+    }
+    setInterval(spawnPowerUp, 7000);
+
+    // Particles
+    let particles = [];
+    function spawnParticles(x, y, color, count = 18, speedMult = 1) {
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const spd = (Math.random() * 5 + 2) * speedMult;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * spd,
+          vy: Math.sin(angle) * spd,
+          life: 1.0,
+          decay: Math.random() * 0.04 + 0.02,
+          color
+        });
+      }
+    }
+
+    function setMode(mode) {
+      gameMode = mode;
+      document.getElementById('btn-1p').classList.toggle('active', mode === '1P');
+      document.getElementById('btn-2p').classList.toggle('active', mode === '2P');
+      p2StatusEl.innerText = mode === "1P" ? "P2: AI AUTO" : "P2: PALM [NORMAL]";
+      resetMatch();
+    }
+
+    function resetMatch() {
+      balls = [createBall()];
+      powerUps = [];
+      p1.h = DEFAULT_PADDLE_H;
+      p2.h = DEFAULT_PADDLE_H;
+    }
+
+    // Euclidean Distance Landmark Check
+    function isHandFist(landmarks) {
+      const wrist = landmarks[0];
+      const dist = (tip, pip) => Math.hypot(landmarks[tip].x - wrist.x, landmarks[tip].y - wrist.y);
+      // If fingertip is pulled closer to wrist than base knuckle, it's curled
+      const indexCurled = dist(8) < Math.hypot(landmarks[5].x - wrist.x, landmarks[5].y - wrist.y) * 1.1;
+      const middleCurled = dist(12) < Math.hypot(landmarks[9].x - wrist.x, landmarks[9].y - wrist.y) * 1.1;
+      const ringCurled = dist(16) < Math.hypot(landmarks[13].x - wrist.x, landmarks[13].y - wrist.y) * 1.1;
+      const pinkyCurled = dist(20) < Math.hypot(landmarks[17].x - wrist.x, landmarks[17].y - wrist.y) * 1.1;
+      return indexCurled && middleCurled && ringCurled && pinkyCurled;
+    }
+
+    function onResults(results) {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        results.multiHandLandmarks.forEach((lms, idx) => {
+          const isFist = isHandFist(lms);
+          // Palm center
+          const palmX = 1 - (lms[0].x + lms[5].x + lms[17].x) / 3;
+          const palmY = (lms[0].y + lms[5].y + lms[17].y) / 3;
+
+          if (gameMode === "1P") {
+            p1.targetY = palmY * canvas.height - p1.h / 2;
+            p1.isFist = isFist;
+            p1StatusEl.innerText = isFist ? "P1: FIST [SMASH ACTIVE!]" : "P1: PALM [NORMAL]";
+            p1StatusEl.style.color = isFist ? "var(--pink)" : "var(--cyan)";
+          } else {
+            if (palmX < 0.5) {
+              p1.targetY = palmY * canvas.height - p1.h / 2;
+              p1.isFist = isFist;
+              p1StatusEl.innerText = isFist ? "P1: FIST [SMASH]" : "P1: PALM";
+              p1StatusEl.style.color = isFist ? "var(--pink)" : "var(--cyan)";
+            } else {
+              p2.targetY = palmY * canvas.height - p2.h / 2;
+              p2.isFist = isFist;
+              p2StatusEl.innerText = isFist ? "P2: FIST [SMASH]" : "P2: PALM";
+              p2StatusEl.style.color = isFist ? "var(--pink)" : "var(--cyan)";
+            }
+          }
+        });
+      }
+    }
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    const camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 640,
+      height: 480
+    });
+    camera.start();
+
+    function triggerPowerUp(power, playerSide) {
+      Sound.powerup();
+      spawnParticles(power.x, power.y, power.color, 30, 1.5);
+
+      const targetPaddle = playerSide === 1 ? p1 : p2;
+      const opponentPaddle = playerSide === 1 ? p2 : p1;
+
+      if (power.type === 'MULTIBALL') {
+        const base = balls[0] || createBall();
+        balls.push(createBall(base.x, base.y, base.vx, base.vy + 3));
+        balls.push(createBall(base.x, base.y, base.vx, base.vy - 3));
+      } else if (power.type === 'SHIELD') {
+        targetPaddle.h = DEFAULT_PADDLE_H * 1.6;
+        setTimeout(() => targetPaddle.h = DEFAULT_PADDLE_H, 8000);
+      } else if (power.type === 'FREEZE') {
+        opponentPaddle.isFrozen = true;
+        opponentPaddle.freezeTimer = 200; // ~3.5 seconds
+      }
+    }
+
+    function update() {
+      // Screen Shake Decay
+      if (screenShake > 0) {
+        arenaWrapper.style.transform = `translate(${(Math.random()-0.5)*screenShake}px, ${(Math.random()-0.5)*screenShake}px)`;
+        screenShake *= 0.88;
+        if (screenShake < 0.5) {
+          screenShake = 0;
+          arenaWrapper.style.transform = `none`;
+        }
+      }
+
+      // Freeze Timer updates
+      [p1, p2].forEach(p => {
+        if (p.isFrozen) {
+          p.freezeTimer--;
+          if (p.freezeTimer <= 0) p.isFrozen = false;
+        }
+      });
+
+      // Paddle Movement
+      const p1Speed = p1.isFrozen ? 0.04 : 0.22;
+      const prevP1Y = p1.y;
+      p1.y += (p1.targetY - p1.y) * p1Speed;
+      p1.y = Math.max(0, Math.min(canvas.height - p1.h, p1.y));
+      p1.vy = p1.y - prevP1Y;
+
+      // P2 Movement (AI or Player)
+      const p2Speed = p2.isFrozen ? 0.04 : 0.22;
+      if (gameMode === "1P") {
+        // Track the closest oncoming ball
+        const incomingBall = balls.find(b => b.vx > 0) || balls[0];
+        if (incomingBall) {
+          p2.targetY = incomingBall.y - p2.h / 2;
+          p2.y += (p2.targetY - p2.y) * (p2.isFrozen ? 0.025 : 0.08);
+        }
+      } else {
+        p2.y += (p2.targetY - p2.y) * p2Speed;
+      }
+      p2.y = Math.max(0, Math.min(canvas.height - p2.h, p2.y));
+
+      // Balls Physics
+      balls.forEach((ball, bIdx) => {
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        ball.trail.push({ x: ball.x, y: ball.y });
+        if (ball.trail.length > (ball.isSuper ? 14 : 7)) ball.trail.shift();
+
+        // Wall Bounces
+        if (ball.y <= ball.size / 2 || ball.y >= canvas.height - ball.size / 2) {
+          ball.vy *= -1;
+          Sound.wall();
+        }
+
+        // Check Power-Up Collision
+        powerUps.forEach((pow, pIdx) => {
+          if (Math.hypot(ball.x - pow.x, ball.y - pow.y) < ball.size / 2 + pow.r) {
+            triggerPowerUp(pow, ball.vx > 0 ? 1 : 2);
+            powerUps.splice(pIdx, 1);
+          }
+        });
+
+        // Paddle 1 Collision
+        if (
+          ball.x - ball.size / 2 <= p1.x + PADDLE_W &&
+          ball.x + ball.size / 2 >= p1.x &&
+          ball.y >= p1.y && ball.y <= p1.y + p1.h &&
+          ball.vx < 0
+        ) {
+          const isSmash = p1.isFist;
+          ball.isSuper = isSmash;
+
+          if (isSmash) {
+            Sound.smash();
+            screenShake = 16;
+            spawnParticles(ball.x, ball.y, '#ff0055', 25, 2);
+            ball.speed = 16;
+          } else {
+            Sound.hit();
+            spawnParticles(ball.x, ball.y, '#00f0ff', 10);
+            ball.speed = Math.min(13, ball.speed + 0.5);
+          }
+
+          const offset = (ball.y - (p1.y + p1.h / 2)) / (p1.h / 2);
+          const angle = offset * (Math.PI / 3.2);
+
+          ball.vx = Math.cos(angle) * ball.speed;
+          ball.vy = Math.sin(angle) * ball.speed + (p1.vy * 0.2);
+        }
+
+        // Paddle 2 Collision
+        if (
+          ball.x + ball.size / 2 >= p2.x &&
+          ball.x - ball.size / 2 <= p2.x + PADDLE_W &&
+          ball.y >= p2.y && ball.y <= p2.y + p2.h &&
+          ball.vx > 0
+        ) {
+          const isSmash = p2.isFist;
+          ball.isSuper = isSmash;
+
+          if (isSmash) {
+            Sound.smash();
+            screenShake = 16;
+            spawnParticles(ball.x, ball.y, '#ff0055', 25, 2);
+            ball.speed = 16;
+          } else {
+            Sound.hit();
+            spawnParticles(ball.x, ball.y, '#ff0055', 10);
+            ball.speed = Math.min(13, ball.speed + 0.5);
+          }
+
+          const offset = (ball.y - (p2.y + p2.h / 2)) / (p2.h / 2);
+          const angle = offset * (Math.PI / 3.2);
+
+          ball.vx = -Math.cos(angle) * ball.speed;
+          ball.vy = Math.sin(angle) * ball.speed;
+        }
+
+        // Scoring
+        if (ball.x < 0) {
+          p2Score++;
+          p2ScoreEl.innerText = p2Score;
+          Sound.score();
+          spawnParticles(0, ball.y, '#ff0055', 40, 2);
+          screenShake = 18;
+          balls.splice(bIdx, 1);
+          if (balls.length === 0) balls.push(createBall(canvas.width / 2, canvas.height / 2, 6.5, 2));
+        } else if (ball.x > canvas.width) {
+          p1Score++;
+          p1ScoreEl.innerText = p1Score;
+          Sound.score();
+          spawnParticles(canvas.width, ball.y, '#00f0ff', 40, 2);
+          screenShake = 18;
+          balls.splice(bIdx, 1);
+          if (balls.length === 0) balls.push(createBall(canvas.width / 2, canvas.height / 2, -6.5, 2));
+        }
+      });
+
+      // Update Particles
+      particles.forEach((p, idx) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= p.decay;
+        if (p.life <= 0) particles.splice(idx, 1);
+      });
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Center Court Net
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.lineWidth = 4;
+      ctx.setLineDash([12, 12]);
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Power-Up Orbs
+      powerUps.forEach(pow => {
+        ctx.beginPath();
+        ctx.arc(pow.x, pow.y, pow.r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.strokeStyle = pow.color;
+        ctx.lineWidth = 3;
+        ctx.shadowColor = pow.color;
+        ctx.shadowBlur = 12;
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.font = "16px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(pow.icon, pow.x, pow.y);
+      });
+
+      // Draw Balls & Trails
+      balls.forEach(ball => {
+        const glowColor = ball.isSuper ? "#ff0055" : "#00f0ff";
+        ball.trail.forEach((t, i) => {
+          ctx.beginPath();
+          ctx.arc(t.x, t.y, (ball.size / 2) * (i / ball.trail.length), 0, Math.PI * 2);
+          ctx.fillStyle = ball.isSuper ? `rgba(255, 0, 85, ${i / 14})` : `rgba(0, 240, 255, ${i / 14})`;
+          ctx.fill();
+        });
+
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.size / 2, 0, Math.PI * 2);
+        ctx.fillStyle = ball.isSuper ? "#ff0055" : "#ffffff";
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = ball.isSuper ? 25 : 15;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      // Paddle 1 (Cyan / Ice / Smash)
+      ctx.fillStyle = p1.isFrozen ? "#00f0ff" : (p1.isFist ? "#ff0055" : "#00f0ff");
+      ctx.shadowColor = p1.isFist ? "rgba(255, 0, 85, 0.8)" : "rgba(0, 240, 255, 0.7)";
+      ctx.shadowBlur = p1.isFist ? 20 : 12;
+      ctx.fillRect(p1.x, p1.y, PADDLE_W, p1.h);
+
+      // Paddle 2 (Pink / Ice / Smash)
+      ctx.fillStyle = p2.isFrozen ? "#00f0ff" : (p2.isFist ? "#ff0055" : "#ff0055");
+      ctx.shadowColor = "rgba(255, 0, 85, 0.7)";
+      ctx.shadowBlur = 12;
+      ctx.fillRect(p2.x, p2.y, PADDLE_W, p2.h);
+      ctx.shadowBlur = 0;
+
+      // Particles
+      particles.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 3, 3);
+        ctx.restore();
+      });
+    }
+
+    let lastTime = performance.now();
+    let frameCount = 0;
+
+    function gameLoop(time) {
+      update();
+      draw();
+
+      frameCount++;
+      if (time - lastTime >= 1000) {
+        fpsCounter.innerText = frameCount;
+        frameCount = 0;
+        lastTime = time;
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    window.addEventListener('click', () => Sound.init(), { once: true });
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
